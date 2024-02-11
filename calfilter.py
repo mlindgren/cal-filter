@@ -1,13 +1,37 @@
 import icalendar
-from icalevents.icalevents import events
+import icalevents.icalevents as icalevents
 import logging
 
-ICAL_FILE = "./work.ics"
+PRIMARY_ICAL_FILE = "./personal.ics"
+TARGET_ICAL_FILE = "./work.ics"
 FILTER_PHRASES = ["OOF", "Blocked"]
 
 DEBUG_EVENT_COUNT = 10
 
+def filter_duplicates(primary_calender_content : str, target_calendar : icalendar.Calendar) -> icalendar.Calendar:
+    """
+    Filters events from the target calendar that are already in the primary calendar.
+    Due to the way the icalevents module works, the primary calendar is passed as a string and re-parsed every time :/
+    See https://github.com/jazzband/icalevents/issues/130
+
+    primary_calender_content: The iCalendar content of the primary calendar as a string
+    target_calendar: The target calendar to filter
+    """
+
+    for event in target_calendar.walk("VEVENT"):
+        result = icalevents.events(
+            string_content = primary_calender_content,
+            start = event.get('DTSTART').dt,
+            end = event.get('DTEND').dt,
+            sort = True)
+        
+
 def filter_events_by_keyword(cal : icalendar.Calendar) -> icalendar.Calendar:
+    """
+    Filters events from the calendar that contain any of the FILTER_PHRASES.
+
+    cal: The calendar to filter
+    """
     filtered = 0
 
     for event in cal.walk("VEVENT"):
@@ -24,8 +48,10 @@ def filter_events_by_keyword(cal : icalendar.Calendar) -> icalendar.Calendar:
 
 def main():
     logging.basicConfig(level=logging.DEBUG)
+
     new_cal = None
-    with open(ICAL_FILE, 'rb') as f:
+
+    with open(TARGET_ICAL_FILE, 'rb') as f:
         cal = icalendar.Calendar.from_ical(f.read())
         new_cal = filter_events_by_keyword(cal)
 
