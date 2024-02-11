@@ -1,2 +1,3 @@
 icalendar
 icalevents
+thefuzz
