@@ -2,6 +2,8 @@ import icalendar
 import logging
 
 from dateutil import rrule
+from http.server import BaseHTTPRequestHandler
+from os import path
 from thefuzz import fuzz
 from time import perf_counter
 
@@ -228,6 +230,21 @@ def main():
         logging.debug(event.get('summary'))
 
     logging.debug(f"Execution time: {perf_counter() - t0:.3f}s")
+
+
+class handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain")
+        self.end_headers()
+
+        primary_calendar = icalendar.Calendar.from_ical(open(path.join("config", PRIMARY_ICAL_FILE), 'r').read())
+        target_calendar = icalendar.Calendar.from_ical(open(path.join("config", TARGET_ICAL_FILE), 'r').read())
+
+        filter_events_by_keyword(target_calendar)
+        filter_duplicates(primary_calendar, target_calendar)
+
+        self.wfile.write(target_calendar.to_ical())
 
 if __name__ == "__main__":
     main()
