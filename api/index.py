@@ -1,34 +1,24 @@
 import icalendar
 import logging
+import json
+import typing
+import urllib3
 
 from dateutil import rrule
 from http.server import BaseHTTPRequestHandler
 from os import path
 from thefuzz import fuzz
 from time import perf_counter
+from urllib.parse import parse_qs
 
-PRIMARY_ICAL_FILE = "./personal.ics"
-TARGET_ICAL_FILE = "./work.ics"
-FILTER_PHRASES = ["OOF", "Blocked", "Lunch"]
+CONFIG_FILE = path.join("config", "config.json")
 
 FUZZY_MATCH_THRESHOLD = 90
-
 DEBUG_EVENT_COUNT = 10
 
-# def fix_rrule_tzinfo(rrule : rrule.rrule, event : icalendar.Event) -> None:
-#     """
-#     Fixes the timezone info on an rrule object if necessary.
-#     """
-
-#     # The way we generate rrule objects is a bit messy. icalendar parses the rules into its own format,
-#     # which we then convert back to a string, and finally to a dateutil.rrule object. Sometimes this
-#     # results in the rrule having no tzinfo event if the event itself does. Timezone-naive and
-#     # timezone-aware datetimes cannot be compared, so we need to make sure they both have tzinfo.
-#     # We can fix this by manually replacing the tzinfo on _dtstart if it's missing.
-#     if rrule._tzinfo is None:
-#         logging.info(f"Event {event.get('SUMMARY')} is missing tzinfo in its RRULE.")
-#         rrule._tzinfo = event.get('DTSTART').dt.tzinfo
-#         rrule._dtstart = rrule._dtstart.replace(tzinfo = rrule._tzinfo)
+def get_config() -> typing.Dict:
+    with open(CONFIG_FILE, "r") as f:
+        return json.load(f)
 
 def events_overlap(event1 : icalendar.Event, event2 : icalendar.Event, time_only : bool = False) -> bool:
     """
@@ -187,7 +177,7 @@ def filter_duplicates(primary_calendar : icalendar.Calendar, target_calendar : i
 
     logging.info(f"Filtered {filtered} duplicate events")
 
-def filter_events_by_keyword(calendar : icalendar.Calendar) -> None:
+def filter_events_by_keyword(keywords : typing.List[str], calendar : icalendar.Calendar) -> None:
     """
     Filters events from the calendar that contain any of the FILTER_PHRASES.
 
@@ -204,7 +194,7 @@ def filter_events_by_keyword(calendar : icalendar.Calendar) -> None:
     # recursively copies the subcomponents into a list and then returns that list, so we're
     # not modifying the same list we're iterating over.
     for event in calendar.walk("VEVENT"):
-        for phrase in FILTER_PHRASES:
+        for phrase in keywords:
             if phrase in event.get('SUMMARY'):
                 logging.debug(f"Filtering event: {event.get('summary')}")
                 calendar.subcomponents.remove(event)
@@ -213,38 +203,62 @@ def filter_events_by_keyword(calendar : icalendar.Calendar) -> None:
     if filtered > 0:
         logging.info(f"Filtered {filtered} events by keyword")
 
-def main():
-    logging.basicConfig(level=logging.DEBUG)
+def get_filtered_calendar(config : typing.Dict) -> icalendar.Calendar:
 
-    t0 = perf_counter()
+    http = urllib3.PoolManager()
 
-    primary_calendar = icalendar.Calendar.from_ical(open(PRIMARY_ICAL_FILE, 'r').read())
-    target_calendar = icalendar.Calendar.from_ical(open(TARGET_ICAL_FILE, 'r').read())
+    primary_calendar_content = None
+    target_calendar_content = None
+    try:
+        primary_calendar_content = http.request("GET", config["primary_ical"]).data
+    except Exception as e:
+        logging.error(f"Error fetching primary calendar: {e}")
+        return None
 
-    filter_events_by_keyword(target_calendar)
+    try:
+        target_calendar_content = http.request("GET", config["target_ical"]).data
+    except Exception as e:
+        logging.error(f"Error fetching target calendar: {e}")
+        return None
+
+    primary_calendar = icalendar.Calendar.from_ical(primary_calendar_content)
+    target_calendar = icalendar.Calendar.from_ical(target_calendar_content)
+
+    filter_events_by_keyword(config["filter_keywords"], target_calendar)
     filter_duplicates(primary_calendar, target_calendar)
 
-    for (i, event) in enumerate(target_calendar.walk("VEVENT")):
-        if i > DEBUG_EVENT_COUNT:
-            break
-        logging.debug(event.get('summary'))
-
-    logging.debug(f"Execution time: {perf_counter() - t0:.3f}s")
-
+    return target_calendar
 
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
+
+        t0 = perf_counter()
+
+        config = get_config()
+    
+        logging.basicConfig(level = logging.DEBUG if config["debug"] == "true" else logging.INFO)
+        qs = parse_qs(urllib3.util.parse_url(self.path).query)
+
+        logging.debug(qs)
+
+        client_secret = qs.get("secret")
+        if type(client_secret) == list:
+            client_secret = client_secret[0]
+
+        if not client_secret or client_secret != config["secret"]:
+            logging.debug("Client secret is invalid.")
+            self.send_response(403)
+            self.end_headers()
+            return
+
         self.send_response(200)
-        self.send_header("Content-type", "text/plain")
+        self.send_header("Content-Type", "text/calendar")
         self.end_headers()
 
-        primary_calendar = icalendar.Calendar.from_ical(open(path.join("config", PRIMARY_ICAL_FILE), 'r').read())
-        target_calendar = icalendar.Calendar.from_ical(open(path.join("config", TARGET_ICAL_FILE), 'r').read())
+        filtered_calendar = get_filtered_calendar(config)
+        self.wfile.write(filtered_calendar.to_ical())
 
-        filter_events_by_keyword(target_calendar)
-        filter_duplicates(primary_calendar, target_calendar)
+        logging.debug(f"Execution time: {perf_counter() - t0:.3f}s")
 
-        self.wfile.write(target_calendar.to_ical())
-
-if __name__ == "__main__":
-    main()
+# if __name__ == "__main__":
+#     main()
