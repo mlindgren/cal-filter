@@ -1,0 +1,7 @@
+{
+    "primary_ical" : "url to your primary calendar",
+    "target_ical" : "url to your target calendar",
+    "filter_keywords" : ["keyword1", "keyword2", "keyword3"],
+    "secret" : "your secret key",
+    "debug" : "true"
+}
